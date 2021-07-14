@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "BakuImage": {
+      "commandName": "Project",
+      "commandLineArgs": "-b testFolder\\ repack"
+    }
+  }
+}
