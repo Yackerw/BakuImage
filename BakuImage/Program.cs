@@ -76,6 +76,33 @@ namespace BakuImage
 			}
 			return Color.Black;
 		}
+
+		static Color ReadColor(ushort col, int format)
+		{
+			switch (format)
+			{
+				case 0x01000100:
+					{
+						Color c0;
+						c0 = Color.FromArgb(Bit5Convert((col & 0xF800) >> 11), Bit6Convert((col & 0x07E0) >> 5), Bit5Convert(col & 0x1F));
+						return c0;
+					}
+				default:
+					{
+						bool alpha = (col & 0x8000) > 0;
+						Color c0;
+						if (!alpha)
+						{
+							c0 = Color.FromArgb(Bit3Convert((col & 0xF000) >> 12), Bit4Convert((col & 0x0F00) >> 8), Bit4Convert((col & 0x00F0) >> 4), Bit4Convert(col & 0xF));
+						}
+						else
+						{
+							c0 = Color.FromArgb(Bit5Convert((col & 0x7C00) >> 10), Bit5Convert((col & 0x03E0) >> 5), Bit5Convert(col & 0x1F));
+						}
+						return c0;
+					}
+			}
+		}
 		static void ConvertImages(string file, string path)
 		{
 			FileStream fs;
@@ -106,7 +133,7 @@ namespace BakuImage
 				// format, presumably
 				int format = ReadBE32(fs);
 				// palette format?
-				int unknown2 = ReadBE32(fs);
+				int colorFormat = ReadBE32(fs);
 				long nextFile = fs.Position;
 				fs.Seek(dataOffset, SeekOrigin.Begin);
 
@@ -169,15 +196,7 @@ namespace BakuImage
 					{
 						// 16 bit colors with 1 bit alpha
 						ushort col0 = (ushort)ReadBE16(fs);
-						bool alpha = (col0 & 0x8000) > 0;
-						Color c0;
-						if (!alpha)
-						{
-							c0 = Color.FromArgb(Bit3Convert((col0 & 0xF000) >> 12), Bit4Convert((col0 & 0x0F00) >> 8), Bit4Convert((col0 & 0x00F0) >> 4), Bit4Convert(col0 & 0xF));
-						} else
-						{
-							c0 = Color.FromArgb(Bit5Convert((col0 & 0x7C00) >> 10), Bit5Convert((col0 & 0x03E0) >> 5), Bit5Convert(col0 & 0x1F));
-						}
+						Color c0 = ReadColor(col0, colorFormat);
 						palette[i2] = c0;
 					}
 					// okay, just read image now
@@ -230,16 +249,7 @@ namespace BakuImage
 					{
 						// 16 bit colors with 1 bit alpha
 						ushort col0 = (ushort)ReadBE16(fs);
-						bool alpha = (col0 & 0x8000) > 0;
-						Color c0;
-						if (!alpha)
-						{
-							c0 = Color.FromArgb(Bit3Convert((col0 & 0xF000) >> 12), Bit4Convert((col0 & 0x0F00) >> 8), Bit4Convert((col0 & 0x00F0) >> 4), Bit4Convert(col0 & 0xF));
-						}
-						else
-						{
-							c0 = Color.FromArgb(Bit5Convert((col0 & 0x7C00) >> 10), Bit5Convert((col0 & 0x03E0) >> 5), Bit5Convert(col0 & 0x1F));
-						}
+						Color c0 = ReadColor(col0, colorFormat);
 						palette[i2] = c0;
 					}
 					// okay, just read image now
@@ -503,24 +513,38 @@ namespace BakuImage
 			fs.Write(tmp);
 		}
 
-		static ushort ColorToBakuColor(Color col)
+		static ushort ColorToBakuColor(Color col, int type = 0)
 		{
-			//float truAlpha = (float)Math.Round((col.A / 255.0f) * 8.0f);
-			byte alpha = col.A;
-			if (alpha == 0x8)
+			switch (type)
 			{
-				//a1rgb5
-				byte r = (byte)(col.R >> 3);
-				byte g = (byte)(col.G >> 3);
-				byte b = (byte)(col.B >> 3);
-				return (ushort)(0x8000 | (r << 10) | (g << 5) | b);
-			} else
-			{
-				// a3rgb4
-				byte r = (byte)(col.R >> 4);
-				byte g = (byte)(col.G >> 4);
-				byte b = (byte)(col.B >> 4);
-				return (ushort)(((alpha) << 12) | (r << 8) | (g << 4) | b);
+				case 0x01000100:
+					{
+						byte r = (byte)(col.R >> 3);
+						byte g = (byte)(col.G >> 2);
+						byte b = (byte)(col.B >> 3);
+						return (ushort)((r << 11) | (g << 5) | b);
+					}
+				default:
+					{
+						//float truAlpha = (float)Math.Round((col.A / 255.0f) * 8.0f);
+						byte alpha = col.A;
+						if (alpha == 0x8)
+						{
+							//a1rgb5
+							byte r = (byte)(col.R >> 3);
+							byte g = (byte)(col.G >> 3);
+							byte b = (byte)(col.B >> 3);
+							return (ushort)(0x8000 | (r << 10) | (g << 5) | b);
+						}
+						else
+						{
+							// a3rgb4
+							byte r = (byte)(col.R >> 4);
+							byte g = (byte)(col.G >> 4);
+							byte b = (byte)(col.B >> 4);
+							return (ushort)(((alpha) << 12) | (r << 8) | (g << 4) | b);
+						}
+					}
 			}
 		}
 
@@ -680,6 +704,169 @@ namespace BakuImage
 			}
 			// that should be it!
 		}
+
+		static void ConvertToPalette(string input, string output)
+		{
+			FileStream fs;
+			try
+			{
+				fs = File.Open(input, FileMode.Open, FileAccess.Read, FileShare.Read);
+			}
+			catch
+			{
+				Console.WriteLine("Failed to open file: " + input);
+				return;
+			}
+			// start with how many images there are
+			int imageCount = ReadBE16(fs);
+			fs.Seek(-0x2, SeekOrigin.Current);
+			// iterate over all of them
+			for (int i = 0; i < imageCount; ++i)
+			{
+				// blank
+				ReadBE32(fs);
+				int dataOffset = ReadBE32(fs);
+				int paletteOffset = ReadBE32(fs);
+				int height = ReadBE16(fs);
+				int width = ReadBE16(fs);
+				// unknown
+				int unknownBitflag = ReadBE32(fs);
+				// unused?
+				ReadBE32(fs);
+				// format, presumably
+				int format = ReadBE32(fs);
+				// palette format?
+				int colorFormat = ReadBE32(fs);
+				long nextFile = fs.Position;
+
+				switch (format)
+				{
+					case 0x8:
+						width = 16;
+						break;
+					case 0x9:
+						width = 256;
+						break;
+						// not palette based image, skip...
+					default:
+						continue;
+				}
+
+				Bitmap bitmap = new Bitmap(width, 1);
+				// we just want to extract the palette onto the image...
+				fs.Seek(paletteOffset, SeekOrigin.Begin);
+				for (int i2 = 0; i2 < width; ++i2)
+				{
+					// just write the bitmap
+					ushort c = (ushort)ReadBE16(fs);
+					bitmap.SetPixel(i2, 0, ReadColor(c, colorFormat));
+				}
+
+				bitmap.Save(output + i.ToString() + ".png", System.Drawing.Imaging.ImageFormat.Png);
+
+				// return to next file
+				fs.Seek(nextFile, SeekOrigin.Begin);
+			}
+		}
+
+		static void ConvertFromPalette(string inputFile, string inputFolder, string outputFile, string outputFolder)
+		{
+			FileStream fs;
+			try
+			{
+				fs = File.Open(inputFile, FileMode.Open, FileAccess.Read, FileShare.Read);
+			}
+			catch
+			{
+				Console.WriteLine("Failed to open file: " + inputFile);
+				return;
+			}
+			// just read the whole file
+			fs.Seek(0, SeekOrigin.End);
+			byte[] b = new byte[fs.Position];
+			fs.Seek(0, SeekOrigin.Begin);
+			fs.Read(b, 0, b.Length);
+			fs.Close();
+
+			// get all files in folder
+			string[] files = Directory.GetFiles(inputFolder);
+			ConvertingImage[] cImages = new ConvertingImage[files.Length];
+			for (int i = 0; i < files.Length; ++i)
+			{
+				try
+				{
+					cImages[i].image = (Bitmap)Bitmap.FromFile(files[i]);
+				}
+				catch
+				{
+					Console.WriteLine("File found that isn't an image!");
+					return;
+				}
+			}
+
+			// get file count for boundaries...
+			int fileCount = (b[1] << 8) | b[0];
+			for (int i = 0; i < cImages.Length; ++i)
+			{
+				int fId;
+				try
+				{
+					fId = Int32.Parse(Path.GetFileNameWithoutExtension(files[i]));
+				} catch
+				{
+					Console.WriteLine("Palette image in incorrect filename format!");
+					return;
+				}
+				int imgOffs = fId * 0x20;
+				// ensure image matches file format & bounds
+				int imageType = b[imgOffs + 0x1B];
+				int paletteIterations = 0;
+				switch (imageType)
+				{
+					case 0x8:
+						if (cImages[i].image.Width < 16)
+						{
+							Console.WriteLine("Image " + i.ToString() + " is not correct width for format! Expected 16, got " + cImages[i].image.Width);
+							return;
+						}
+						// image width fine, just set up iteration count now then
+						paletteIterations = 16;
+						break;
+					case 0x9:
+						if (cImages[i].image.Width < 256)
+						{
+							Console.WriteLine("Image " + i.ToString() + " is not correct width for format! Expected 256, got " + cImages[i].image.Width);
+							return;
+						}
+						paletteIterations = 256;
+						break;
+					default:
+						Console.WriteLine("Trying to replace palette of non-paletted or non-supported image format!");
+						return;
+				}
+				int paletteFormat = (b[imgOffs + 0x1C] << 24) | (b[imgOffs + 0x1D] << 16) | (b[imgOffs + 0x1E] << 8) | b[imgOffs + 0x1F];
+				int paletteOffset = (b[imgOffs + 0x8] << 24) | (b[imgOffs + 0x9] << 16) | (b[imgOffs + 0xA] << 8) | b[imgOffs + 0xB];
+				for (int i2 = 0; i2 < paletteIterations; ++i2)
+				{
+					// convert the color to the proper format...!
+					ushort col = ColorToBakuColor(cImages[i].image.GetPixel(i2, 0), paletteFormat);
+					Color refTest = cImages[i].image.GetPixel(i2, 0);
+					Color test = ReadColor(col, paletteFormat);
+					b[paletteOffset + (i2 * 2)] = (byte)(col >> 8);
+					b[paletteOffset + (i2 * 2) + 1] = (byte)(col & 0xFF);
+				}
+			}
+			// win?
+			fs = File.Open(outputFile, FileMode.Create, FileAccess.Write);
+			fs.Write(b, 0, b.Length);
+			fs.Close();
+			// and our optional output path...
+			if (outputFolder != "")
+			{
+				ConvertImages(outputFile, outputFolder);
+			}
+		}
+
 		static void Main(string[] args)
 		{
 			int mode = 0;
@@ -691,39 +878,102 @@ namespace BakuImage
 			if (args[0] == "-p")
 			{
 				mode = 0;
-			} else if (args[0] == "-b")
+			}
+			else if (args[0] == "-b")
 			{
 				mode = 1;
-			} else
+			}
+			else if (args[0] == "-ao")
 			{
-				Console.WriteLine("BakuImage.exe [mode] [input] [output]\r\nModes:\r\n-p: convert images to png\r\n-b: convert folder of images to bakugan format");
+				mode = 2;
+			}
+			else if (args[0] == "-ai")
+			{
+				mode = 3;
+			}
+			else
+			{
+				Console.WriteLine("BakuImage.exe [mode] [input] [output/input 2] <output> <output 2>\r\nModes:\r\n-p: convert images to png\r\n-b: convert folder of images to bakugan format\r\n-ao: extract the palette from an image\r\n-ai: replace the palette in an image; folder holding palettes in input 1, original bakugan image file in input 2, output to output (can use output 2 to then automatically convert it to pngs to preview as well)");
 				return;
 			}
-			if (mode == 0)
+			switch (mode)
 			{
-				string tmp = args[2];
-				if (tmp[tmp.Length - 1] != "\\"[0])
-				{
-					tmp += "\\";
-				}
-				if (!Directory.Exists(tmp))
-				{
-					Directory.CreateDirectory(tmp);
-				}
-				ConvertImages(args[1], tmp);
-			} else
-			{
-				string tmp = args[1];
-				if (tmp[tmp.Length - 1] != "\\"[0])
-				{
-					tmp += "\\";
-				}
-				if (!Directory.Exists(tmp))
-				{
-					Console.WriteLine("Can't find folder: " + tmp);
-					return;
-				}
-				ConvertToImages(args[2], tmp);
+				case 0:
+					{
+						string tmp = args[2];
+						if (tmp[tmp.Length - 1] != "\\"[0])
+						{
+							tmp += "\\";
+						}
+						if (!Directory.Exists(tmp))
+						{
+							Directory.CreateDirectory(tmp);
+						}
+						ConvertImages(args[1], tmp);
+					}
+					break;
+				case 1:
+					{
+						string tmp = args[1];
+						if (tmp[tmp.Length - 1] != "\\"[0])
+						{
+							tmp += "\\";
+						}
+						if (!Directory.Exists(tmp))
+						{
+							Console.WriteLine("Can't find folder: " + tmp);
+							return;
+						}
+						ConvertToImages(args[2], tmp);
+					}
+					break;
+				case 2:
+					{
+						string tmp = args[2];
+						if (tmp[tmp.Length - 1] != "\\"[0])
+						{
+							tmp += "\\";
+						}
+						if (!Directory.Exists(tmp))
+						{
+							Directory.CreateDirectory(tmp);
+						}
+						ConvertToPalette(args[1], tmp);
+					}
+					break;
+				case 3:
+					{
+						if (args.Length < 4)
+						{
+							Console.WriteLine("Not enough arguments!");
+							return;
+						}
+						string tmp = args[1];
+						if (tmp[tmp.Length - 1] != "\\"[0])
+						{
+							tmp += "\\";
+						}
+						if (!Directory.Exists(tmp))
+						{
+							Console.WriteLine("Can't find folder: " + tmp);
+							return;
+						}
+						string extraConvert = "";
+						if (args.Length > 3)
+						{
+							extraConvert = args[4];
+							if (extraConvert[extraConvert.Length - 1] != "\\"[0])
+							{
+								extraConvert += "\\";
+							}
+							if (!Directory.Exists(extraConvert))
+							{
+								Directory.CreateDirectory(extraConvert);
+							}
+						}
+						ConvertFromPalette(args[2], tmp, args[3], extraConvert);
+					}
+					break;
 			}
 		}
 	}

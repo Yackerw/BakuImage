@@ -2,7 +2,7 @@
   "profiles": {
     "BakuImage": {
       "commandName": "Project",
-      "commandLineArgs": "-b testFolder\\ repack"
+      "commandLineArgs": "-ai deltapal 2 deltaedit deltaeditfolder"
     }
   }
 }
