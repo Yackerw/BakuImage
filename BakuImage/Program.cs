@@ -849,7 +849,9 @@ namespace BakuImage
 				for (int i2 = 0; i2 < paletteIterations; ++i2)
 				{
 					// convert the color to the proper format...!
-					ushort col = ColorToBakuColor(cImages[i].image.GetPixel(i2, 0), paletteFormat);
+					Color colo = cImages[i].image.GetPixel(i2, 0);
+					colo = Color.FromArgb(colo.A == 255 ? 8 : colo.A >> 5, colo.R, colo.G, colo.B);
+					ushort col = ColorToBakuColor(colo, paletteFormat);
 					Color refTest = cImages[i].image.GetPixel(i2, 0);
 					Color test = ReadColor(col, paletteFormat);
 					b[paletteOffset + (i2 * 2)] = (byte)(col >> 8);

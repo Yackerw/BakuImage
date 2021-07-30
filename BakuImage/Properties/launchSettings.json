@@ -2,7 +2,7 @@
   "profiles": {
     "BakuImage": {
       "commandName": "Project",
-      "commandLineArgs": "-ai deltapal 2 deltaedit deltaeditfolder"
+      "commandLineArgs": "-ai uipal ui uitest uiout"
     }
   }
 }
