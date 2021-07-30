@@ -872,7 +872,7 @@ namespace BakuImage
 			int mode = 0;
 			if (args.Length < 3)
 			{
-				Console.WriteLine("BakuImage.exe [mode] [input] [output]\r\nModes:\r\n-p: convert images to png\r\n-b: convert folder of images to bakugan format");
+				Console.WriteLine("BakuImage.exe [mode] [input] [output/input 2] <output> <output 2>\r\nModes:\r\n-p: convert images to png\r\n-b: convert folder of images to bakugan format\r\n-ao: extract the palette from an image\r\n-ai: replace the palette in an image; folder holding palettes in input 1, original bakugan image file in input 2, output to output (can use output 2 to then automatically convert it to pngs to preview as well)");
 				return;
 			}
 			if (args[0] == "-p")
