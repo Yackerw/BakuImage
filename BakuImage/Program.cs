@@ -2,6 +2,7 @@
 using System.IO;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 
 namespace BakuImage
 {
@@ -29,6 +30,19 @@ namespace BakuImage
 			tmp[2] = tmp3;
 			tmp[3] = tmp2;
 			return BitConverter.ToInt32(tmp, 0);
+		}
+
+		static float ReadBEF32(FileStream fs)
+		{
+			byte[] tmp = new byte[4];
+			fs.Read(tmp, 0, 4);
+			byte tmp2 = tmp[0];
+			byte tmp3 = tmp[1];
+			tmp[0] = tmp[3];
+			tmp[1] = tmp[2];
+			tmp[2] = tmp3;
+			tmp[3] = tmp2;
+			return BitConverter.ToSingle(tmp, 0);
 		}
 
 		static int Bit5Convert(int input)
@@ -513,6 +527,30 @@ namespace BakuImage
 			fs.Write(tmp);
 		}
 
+		static void WriteLEU32(FileStream fs, uint value)
+		{
+			byte[] tmp = BitConverter.GetBytes(value);
+			byte tmp0 = tmp[0];
+			byte tmp1 = tmp[1];
+			tmp[0] = tmp[3];
+			tmp[1] = tmp[2];
+			tmp[2] = tmp1;
+			tmp[3] = tmp0;
+			fs.Write(tmp);
+		}
+
+		static void WriteLEF32(FileStream fs, float value)
+		{
+			byte[] tmp = BitConverter.GetBytes(value);
+			byte tmp0 = tmp[0];
+			byte tmp1 = tmp[1];
+			tmp[0] = tmp[3];
+			tmp[1] = tmp[2];
+			tmp[2] = tmp1;
+			tmp[3] = tmp0;
+			fs.Write(tmp);
+		}
+
 		static ushort ColorToBakuColor(Color col, int type = 0)
 		{
 			switch (type)
@@ -869,12 +907,470 @@ namespace BakuImage
 			}
 		}
 
+
+		static void AddToArray(byte[] array, int toAdd, int offs)
+		{
+			// endianness...
+			byte[] tmp = BitConverter.GetBytes(toAdd);
+			byte[] tmp2 = BitConverter.GetBytes(toAdd);
+			tmp[0] = tmp2[3];
+			tmp[1] = tmp2[2];
+			tmp[2] = tmp2[1];
+			tmp[3] = tmp2[0];
+			Array.Copy(tmp, 0, array, offs, 4);
+		}
+
+		static void AddToArray16(byte[] array, ushort toAdd, int offs)
+		{
+			// endianness...
+			byte[] tmp = BitConverter.GetBytes(toAdd);
+			byte[] tmp2 = BitConverter.GetBytes(toAdd);
+			tmp[0] = tmp2[1];
+			tmp[1] = tmp2[0];
+			Array.Copy(tmp, 0, array, offs, 2);
+		}
+
+
+		struct BakuImgHeader
+		{
+			public int dataOffset;
+			public int paletteOffset;
+			public short height;
+			public short width;
+			public int flags;
+			public int padding;
+			public int format;
+			public int colorFormat;
+		}
+
+		class DictHelper
+		{
+			public byte[] data;
+			public int offset;
+		}
+
+		struct BakuUV
+		{
+			public ushort image;
+			public float x1;
+			public float y1;
+			public float x2;
+			public float y2;
+		}
+
+		static void AppendToFile(string inputFile, string inputFolder, string output)
+		{
+			FileStream fs;
+			try
+			{
+				fs = File.Open(inputFile, FileMode.Open, FileAccess.Read);
+			} catch
+			{
+				Console.WriteLine("Failed to open file: " + inputFile);
+				return;
+			}
+			// initial header...
+			int imagesStart = ReadBE32(fs);
+			int imageInfoStart = ReadBE32(fs);
+			// start by parsing the images and storing them to re-write later
+			fs.Seek(imagesStart, SeekOrigin.Begin);
+			int imageCount = ReadBE16(fs);
+			BakuImgHeader[] oldImages = new BakuImgHeader[imageCount];
+			fs.Seek(-2, SeekOrigin.Current);
+			for (int i = 0; i < imageCount; ++i)
+			{
+				// 0 padding
+				ReadBE32(fs);
+				oldImages[i].dataOffset = ReadBE32(fs);
+				oldImages[i].paletteOffset = ReadBE32(fs);
+				oldImages[i].height = (short)ReadBE16(fs);
+				oldImages[i].width = (short)ReadBE16(fs);
+				oldImages[i].flags = ReadBE32(fs);
+				// should be unused always but just in case
+				oldImages[i].padding = ReadBE32(fs);
+				oldImages[i].format = ReadBE32(fs);
+				oldImages[i].colorFormat = ReadBE32(fs);
+			}
+			// read all the palettes and texture data
+			Dictionary<int, DictHelper> oldPalettes = new Dictionary<int, DictHelper>();
+			Dictionary<int, DictHelper> oldTextures = new Dictionary<int, DictHelper>();
+			for (int i = 0; i < imageCount; ++i)
+			{
+				if (!oldPalettes.ContainsKey(oldImages[i].paletteOffset))
+				{
+					byte[] pal = null;
+					if (oldImages[i].format == 0x8)
+					{
+						pal = new byte[16*2];
+					} else if (oldImages[i].format == 0x9)
+					{
+						pal = new byte[256 * 2];
+					}
+					// account for non-paletted textures, should they exist (they shouldn't, but y'know.)
+					if (pal != null)
+					{
+						fs.Seek(oldImages[i].paletteOffset + imagesStart, SeekOrigin.Begin);
+						fs.Read(pal, 0, pal.Length);
+						DictHelper dh = new DictHelper();
+						dh.data = pal;
+						oldPalettes.Add(oldImages[i].paletteOffset, dh);
+					}
+				}
+				if (!oldTextures.ContainsKey(oldImages[i].dataOffset))
+				{
+					byte[] tex = null;
+					if (oldImages[i].format == 0x8 || oldImages[i].format == 14)
+					{
+						tex = new byte[oldImages[i].height * oldImages[i].width / 2];
+					}
+					else if (oldImages[i].format == 0x9)
+					{
+						tex = new byte[oldImages[i].height * oldImages[i].width];
+					}
+					fs.Seek(oldImages[i].dataOffset + imagesStart, SeekOrigin.Begin);
+					fs.Read(tex, 0, tex.Length);
+					DictHelper dh = new DictHelper();
+					dh.data = tex;
+					oldTextures.Add(oldImages[i].dataOffset, dh);
+				}
+			}
+
+			// load the other images
+			string[] files = Directory.GetFiles(inputFolder);
+
+			// get formats, yadda yadda...
+			ConvertingImage[] cImages = new ConvertingImage[files.Length];
+			for (int i = 0; i < files.Length; ++i)
+			{
+				try
+				{
+					cImages[i].image = (Bitmap)Bitmap.FromFile(files[i]);
+				}
+				catch
+				{
+					Console.WriteLine("File found that isn't an image!");
+					return;
+				}
+				cImages[i].format = GetFormat(files[i]);
+			}
+
+			PaletteImage[] pImages = new PaletteImage[files.Length];
+			BakuImgHeader[] newImages = new BakuImgHeader[files.Length];
+
+			// largely re-using code from the GVR converter for palette generation
+			for (int i = 0; i < cImages.Length; ++i)
+			{
+				BakuImgHeader hdr = new BakuImgHeader();
+				switch (cImages[i].format)
+				{
+					case 8:
+						// 16 bit image
+						pImages[i] = PaletteifyImage(cImages[i].image, 16);
+						// convert the data to 4 bit 8x8 blocks!
+						pImages[i].convertedIndexes = Blockify4(pImages[i]);
+						break;
+					default:
+						Console.WriteLine("Unsupported format " + cImages[i].format.ToString() + " for file " + files[i] + ", defaulting to 9");
+						cImages[i].format = 9;
+						goto case 9;
+					case 9:
+						pImages[i] = PaletteifyImage(cImages[i].image, 256);
+						pImages[i].convertedIndexes = Blockify8(pImages[i]);
+						break;
+				}
+				hdr.format = cImages[i].format;
+				hdr.colorFormat = 0x01000200;
+				hdr.flags = 0x00000101;
+				hdr.height = (short)pImages[i].height;
+				hdr.width = (short)pImages[i].width;
+				newImages[i] = hdr;
+			}
+			// get the image headerinfo
+			fs.Seek(imageInfoStart, SeekOrigin.Begin);
+			// yeah no idea what these are tbh
+			int infoMagic1 = ReadBE32(fs);
+			int infoMagic2 = ReadBE32(fs);
+			int mainInfoPtr = ReadBE32(fs) + imageInfoStart;
+			int UVPtr = ReadBE32(fs) + imageInfoStart;
+			int unkPtr = ReadBE32(fs) + imageInfoStart;
+
+			// let's start with the main info stuff
+			fs.Seek(mainInfoPtr, SeekOrigin.Begin);
+			int mainInfoCount = ReadBE32(fs);
+			int mainInfoSize = ReadBE32(fs) - ((mainInfoCount * 4) + 8);
+			// making this a list so we can just append to it later!
+			List<int> mainInfoPtrs = new List<int>();
+			for (int i = 0; i < mainInfoCount; ++i)
+			{
+				mainInfoPtrs.Add(ReadBE32(fs));
+			}
+			// now we just read the base data to rewrite
+			byte[] baseMainInfoData = new byte[mainInfoSize];
+			fs.Read(baseMainInfoData, 0, mainInfoSize);
+
+			// and now read the UV maps
+			fs.Seek(UVPtr, SeekOrigin.Begin);
+			int UVCount = ReadBE32(fs);
+			// again, make a list so we can append it later
+			List<BakuUV> UVMaps = new List<BakuUV>();
+			// UV section file size--not needed
+			ReadBE32(fs);
+			for (int i = 0; i < UVCount; ++i)
+			{
+				BakuUV currUV = new BakuUV();
+				currUV.image = (ushort)ReadBE16(fs);
+				// padding
+				ReadBE16(fs);
+				currUV.x1 = ReadBEF32(fs);
+				currUV.y1 = ReadBEF32(fs);
+				currUV.x2 = ReadBEF32(fs);
+				currUV.y2 = ReadBEF32(fs);
+				UVMaps.Add(currUV);
+			}
+
+			// done with the file
+			fs.Close();
+
+			// let's reconstruct the image file now
+			int totalFileSize = 0;
+			totalFileSize = (imageCount + files.Length) * 0x20;
+			int currData = totalFileSize;
+			for (int i = 0; i < oldPalettes.Count; ++i)
+			{
+				totalFileSize += oldPalettes.ElementAt(i).Value.data.Length;
+				totalFileSize += 0x20 - (oldPalettes.ElementAt(i).Value.data.Length % 0x20);
+			}
+			for (int i = 0; i < oldTextures.Count; ++i)
+			{
+				totalFileSize += oldTextures.ElementAt(i).Value.data.Length;
+				totalFileSize += 0x20 - (oldTextures.ElementAt(i).Value.data.Length % 0x20);
+			}
+			// new images
+			for (int i = 0; i < files.Length; ++i)
+			{
+				totalFileSize += pImages[i].palette.Count * 2;
+				totalFileSize += pImages[i].convertedIndexes.Length;
+				// align these to 0x20
+				totalFileSize += 0x20 - ((pImages[i].palette.Count * 2) % 0x20);
+				totalFileSize += 0x20 - ((pImages[i].convertedIndexes.Length) % 0x20);
+			}
+			// create buffer now
+			byte[] buff = new byte[totalFileSize];
+			for (int i = 0; i < oldPalettes.Count; ++i)
+			{
+				DictHelper dh = oldPalettes.ElementAt(i).Value;
+				Array.Copy(dh.data, 0, buff, currData, dh.data.Length);
+				dh.offset = currData;
+				currData += dh.data.Length;
+				currData += 0x20 - (oldPalettes.ElementAt(i).Value.data.Length % 0x20);
+			}
+			for (int i = 0; i < oldTextures.Count; ++i)
+			{
+				DictHelper dh = oldTextures.ElementAt(i).Value;
+				Array.Copy(dh.data, 0, buff, currData, dh.data.Length);
+				dh.offset = currData;
+				currData += dh.data.Length;
+				currData += 0x20 - (oldTextures.ElementAt(i).Value.data.Length % 0x20);
+			}
+			int[] newPalOffs = new int[newImages.Count()];
+			int[] newTexOffs = new int[newImages.Count()];
+			// add new files now too
+			for (int i = 0; i < newImages.Count(); ++i)
+			{
+				newPalOffs[i] = currData;
+				for (int i2 = 0; i2 < pImages[i].palette.Count(); ++i2)
+				{
+					AddToArray16(buff, ColorToBakuColor(pImages[i].palette[i2]), currData);
+					currData += 2;
+				}
+				currData += 0x20 - (pImages[i].palette.Count() * 2 % 0x20);
+			}
+			for (int i = 0; i < newImages.Count(); ++i)
+			{
+				newTexOffs[i] = currData;
+				Array.Copy(pImages[i].convertedIndexes, 0, buff, currData, pImages[i].convertedIndexes.Count());
+				currData += pImages[i].convertedIndexes.Count();
+				currData += 0x20 - (pImages[i].convertedIndexes.Length % 0x20);
+			}
+			// write the headers again now
+			for (int i = 0; i < oldImages.Count(); ++i)
+			{
+				// get the new offsets
+				int dataOffs = oldTextures[oldImages[i].dataOffset].offset;
+				AddToArray(buff, dataOffs, (0x20 * i) + 4);
+				if (oldImages[i].paletteOffset != 0)
+				{
+					int palOffs = oldPalettes[oldImages[i].paletteOffset].offset;
+					AddToArray(buff, palOffs, (0x20 * i) + 8);
+				}
+				// and just copy the rest raw
+				AddToArray16(buff, (ushort)oldImages[i].height, (0x20 * i) + 0xC);
+				AddToArray16(buff, (ushort)oldImages[i].width, (0x20 * i) + 0xE);
+				AddToArray(buff, oldImages[i].flags, (0x20 * i) + 0x10);
+				AddToArray(buff, oldImages[i].padding, (0x20 * i) + 0x14);
+				AddToArray(buff, oldImages[i].format, (0x20 * i) + 0x18);
+				AddToArray(buff, oldImages[i].colorFormat, (0x20 * i) + 0x1C);
+			}
+			// and new headers
+			for (int i = 0; i < newImages.Count(); ++i)
+			{
+				int newBase = (oldImages.Count() + i) * 0x20;
+				AddToArray(buff, newTexOffs[i], newBase + 4);
+				AddToArray(buff, newPalOffs[i], newBase + 8);
+				AddToArray16(buff, (ushort)newImages[i].height, newBase + 0xC);
+				AddToArray16(buff, (ushort)newImages[i].width, newBase + 0xE);
+				AddToArray(buff, newImages[i].flags, newBase + 0x10);
+				AddToArray(buff, 0, newBase + 0x14);
+				AddToArray(buff, newImages[i].format, newBase + 0x18);
+				AddToArray(buff, newImages[i].colorFormat, newBase + 0x1C);
+			}
+			// write image count
+			AddToArray16(buff, (ushort)(oldImages.Count() + newImages.Count()), 0);
+			// and write output
+			try
+			{
+				fs = File.Open(output, FileMode.Create, FileAccess.Write);
+			}
+			catch
+			{
+				Console.WriteLine("Failed to open file: " + output);
+			}
+			// write initial header
+			WriteLE32(fs, 0x20);
+			// pad out a little...
+			int padAmount = 0x20 - (totalFileSize % 0x20);
+			totalFileSize += padAmount;
+			WriteLE32(fs, totalFileSize + 0x20);
+			// and 0x18 padding
+			for (int i = 0; i < 6; ++i)
+			{
+				WriteLE32(fs, 0);
+			}
+			// and just write the whole damn thing
+			fs.Write(buff, 0, buff.Length);
+
+			// pad out to match our new start
+			for (int i = 0; i < padAmount; ++i)
+			{
+				fs.WriteByte(0);
+			}
+
+			int mainInfoPtrsBaseSize = mainInfoPtrs.Count;
+
+			// add new files to the list
+			for (int i = 0; i < newImages.Length; ++i)
+			{
+				// 0x5C is the size of data we add per file, and subtract 1 for max iterations since that gets re-added later
+				mainInfoPtrs.Add(mainInfoSize + 8 + (mainInfoPtrsBaseSize * 4) + (i * 0x5C));
+				// add UV maps too
+				BakuUV newUV = new BakuUV();
+				newUV.image = (ushort)(oldImages.Length + i);
+				newUV.x1 = 0f;
+				newUV.y1 = 0f;
+				newUV.x2 = 1f;
+				newUV.y2 = 1f;
+				UVMaps.Add(newUV);
+			}
+
+			// adjust pointers
+			for (int i = 0; i < mainInfoPtrs.Count; ++i)
+			{
+				mainInfoPtrs[i] += newImages.Length * 4;
+			}
+			// adjust mainInfoSize to simplify things
+			mainInfoSize += newImages.Length * 0x5C;
+
+			// now, write the file info
+			WriteLE32(fs, infoMagic1);
+			WriteLE32(fs, infoMagic2);
+			// offset to main info
+			WriteLE32(fs, 0x14);
+			// offset to UV Maps
+			// TODO: on everything that references mainInfoSize, to update it to incorporate our new sizes
+			WriteLE32(fs, mainInfoSize + 8 + (mainInfoPtrs.Count() * 4) + 0x14);
+			// offset to ? data
+			WriteLE32(fs, mainInfoSize + 8 + (mainInfoPtrs.Count() * 4) + 8 + (UVMaps.Count() * 0x14) + 0x14);
+			// now just straight up write the main info
+			// count
+			WriteLE32(fs, mainInfoPtrs.Count());
+			// size of section (i'm not entirely sure this is even necessary but i want to include it anyways)
+			WriteLE32(fs, mainInfoSize + 8 + (mainInfoPtrs.Count() * 4));
+			// ptrs
+			for (int i = 0; i < mainInfoPtrs.Count(); ++i)
+			{
+				WriteLE32(fs, mainInfoPtrs[i]);
+			}
+			// now main info
+			// TODO: add our additional data here
+			fs.Write(baseMainInfoData, 0, baseMainInfoData.Length);
+			// write data for our new images
+			for (int i = 0; i < newImages.Length; ++i)
+			{
+				// ? 0
+				WriteLE32(fs, 0);
+				// image count
+				WriteLE32(fs, 1);
+				// total size(?)
+				WriteLE32(fs, 0x5C);
+				// first image offset; we'll have written 0x10 bytes after this, so
+				WriteLE32(fs, 0x10);
+				// count, once more, plus struct size?
+				WriteLE32(fs, 0x00010048);
+				// struct size
+				WriteLE16(fs, 0x12);
+				// type...?
+				WriteLE16(fs, 0);
+				// ??
+				WriteLE16(fs, 0x0400);
+				// what UVMap to render
+				WriteLE16(fs, (ushort)(UVCount + i));
+				// don't know what any of the rest of this junk is
+				for (int i2 = 0; i2 < 6; ++i2)
+				{
+					WriteLE32(fs, 0);
+				}
+				WriteLE32(fs, 0x00000200);
+				for (int i2 = 0; i2 < 4; ++i2)
+				{
+					WriteLEU32(fs, 0xFF99FFE0);
+				}
+				// image center...?
+				WriteLE16(fs, 0x0400);
+				WriteLE16(fs, 0x0400);
+				for (int i2 = 0; i2 < 4; ++i2)
+				{
+					WriteLEU32(fs, 0xFFFFFFFF);
+				}
+			}
+			// UV maps now
+			WriteLE32(fs, UVMaps.Count());
+			// size
+			WriteLE32(fs, 8 + (UVMaps.Count * 0x14));
+			// iterate over and write all the UV maps
+			for (int i = 0; i < UVMaps.Count; ++i)
+			{
+				WriteLE16(fs, UVMaps[i].image);
+				WriteLE16(fs, 0);
+				WriteLEF32(fs, UVMaps[i].x1);
+				WriteLEF32(fs, UVMaps[i].y1);
+				WriteLEF32(fs, UVMaps[i].x2);
+				WriteLEF32(fs, UVMaps[i].y2);
+			}
+
+			// and now just write our mystery data
+			WriteLE32(fs, 0);
+			WriteLE32(fs, 0x8);
+			WriteLE32(fs, 0);
+
+			fs.Close();
+		}
+
 		static void Main(string[] args)
 		{
 			int mode = 0;
 			if (args.Length < 3)
 			{
-				Console.WriteLine("BakuImage.exe [mode] [input] [output/input 2] <output> <output 2>\r\nModes:\r\n-p: convert images to png\r\n-b: convert folder of images to bakugan format\r\n-ao: extract the palette from an image\r\n-ai: replace the palette in an image; folder holding palettes in input 1, original bakugan image file in input 2, output to output (can use output 2 to then automatically convert it to pngs to preview as well)");
+				Console.WriteLine("BakuImage.exe [mode] [input] [output/input 2] <output> <output 2>\r\nModes:\r\n-p: convert images to png\r\n-b: convert folder of images to bakugan format\r\n-ao: extract the palette from an image\r\n-ai: replace the palette in an image; folder holding palettes in input 1, original bakugan image file in input 2, output to output (can use output 2 to then automatically convert it to pngs to preview as well)\r\n-ap: appends images to a HUD archive, including setting them up to be rendered. Base file in input1, folder of images to append in input2, output file in output");
 				return;
 			}
 			if (args[0] == "-p")
@@ -892,10 +1388,13 @@ namespace BakuImage
 			else if (args[0] == "-ai")
 			{
 				mode = 3;
+			} else if (args[0] == "-ap")
+			{
+				mode = 4;
 			}
 			else
 			{
-				Console.WriteLine("BakuImage.exe [mode] [input] [output/input 2] <output> <output 2>\r\nModes:\r\n-p: convert images to png\r\n-b: convert folder of images to bakugan format\r\n-ao: extract the palette from an image\r\n-ai: replace the palette in an image; folder holding palettes in input 1, original bakugan image file in input 2, output to output (can use output 2 to then automatically convert it to pngs to preview as well)");
+				Console.WriteLine("BakuImage.exe [mode] [input] [output/input 2] <output> <output 2>\r\nModes:\r\n-p: convert images to png\r\n-b: convert folder of images to bakugan format\r\n-ao: extract the palette from an image\r\n-ai: replace the palette in an image; folder holding palettes in input 1, original bakugan image file in input 2, output to output (can use output 2 to then automatically convert it to pngs to preview as well)\r\n-ap: appends images to a HUD archive, including setting them up to be rendered. Base file in input1, folder of images to append in input2, output file in output");
 				return;
 			}
 			switch (mode)
@@ -974,6 +1473,26 @@ namespace BakuImage
 							}
 						}
 						ConvertFromPalette(args[2], tmp, args[3], extraConvert);
+					}
+					break;
+				case 4:
+					{
+						if (args.Length < 4)
+						{
+							Console.WriteLine("Not enough arguments!");
+							return;
+						}
+						string tmp = args[2];
+						if (tmp[tmp.Length - 1] != "\\"[0])
+						{
+							tmp += "\\";
+						}
+						if (!Directory.Exists(tmp))
+						{
+							Console.WriteLine("Can't find folder: " + tmp);
+							return;
+						}
+						AppendToFile(args[1], tmp, args[3]);
 					}
 					break;
 			}
