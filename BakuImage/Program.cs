@@ -343,9 +343,9 @@ namespace BakuImage
 					// compare it against all previously established colors
 					bool sameColor = false;
 					float alpha = (float)Math.Round((col.A / 255.0f) * 8.0f);
+					col = Color.FromArgb((byte)alpha, (col.R >> 3) << 3, (col.G >> 3) << 3, (col.B >> 3) << 3);
 					for (int i3 = 0; i3 < usedColors.Count; ++i3)
 					{
-						col = Color.FromArgb((byte)alpha, (col.R >> 3) << 3, (col.G >> 3) << 3, (col.B >> 3) << 3);
 						if (usedColors[i3] == col)
 						{
 							sameColor = true;
@@ -613,7 +613,7 @@ namespace BakuImage
 				{
 					case 8:
 						// 16 bit image
-						pImages[i] = PaletteifyImage(cImages[i].image, 16);
+							pImages[i] = PaletteifyImage(cImages[i].image, 16);
 						// convert the data to 4 bit 8x8 blocks!
 						pImages[i].convertedIndexes = Blockify4(pImages[i]);
 						break;
@@ -741,6 +741,7 @@ namespace BakuImage
 				fs.Write(pImages[i].convertedIndexes);
 			}
 			// that should be it!
+			fs.Close();
 		}
 
 		static void ConvertToPalette(string input, string output)

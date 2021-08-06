@@ -2,7 +2,7 @@
   "profiles": {
     "BakuImage": {
       "commandName": "Project",
-      "commandLineArgs": "-ap 0 NANow 0new"
+      "commandLineArgs": "-b aquosdragobattle whytho"
     }
   }
 }
