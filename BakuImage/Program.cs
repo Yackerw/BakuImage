@@ -376,7 +376,7 @@ namespace BakuImage
 						deltaColor += Math.Abs((usedColors[i].G >> 3) - (usedColors[i2].G >> 3));
 						deltaColor += Math.Abs((usedColors[i].B >> 3) - (usedColors[i2].B >> 3));
 						// make alpha really heavy for determining
-						deltaColor += Math.Abs((usedColors[i].A) - (usedColors[i].A));
+						deltaColor += Math.Abs((usedColors[i].A) - (usedColors[i2].A)) * 768;
 						if (deltaColor <= lowestDelta)
 						{
 							lowestDelta = deltaColor;
@@ -1331,11 +1331,15 @@ namespace BakuImage
 					WriteLE32(fs, 0);
 				}
 				WriteLE32(fs, 0x00000200);
+				// write offsets to center it; XY XY XY XY
+				int xoffs = newImages[i].width / 2;
+				int yoffs = newImages[i].height / 2;
+				uint offsToWrite = (0xFFFF - (uint)xoffs) << 16 | (0xFFFF - (uint)yoffs);
 				for (int i2 = 0; i2 < 4; ++i2)
 				{
-					WriteLEU32(fs, 0xFF99FFE0);
+					WriteLEU32(fs, offsToWrite);
 				}
-				// image center...?
+				// image scale...?
 				WriteLE16(fs, 0x0400);
 				WriteLE16(fs, 0x0400);
 				for (int i2 = 0; i2 < 4; ++i2)
